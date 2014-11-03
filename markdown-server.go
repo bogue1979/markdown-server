@@ -16,14 +16,19 @@ const version = `markdown-server 1.0`
 const usage = `Usage: markdown-server [-v] [--root=DIR] [ADDR]
 
 Options:
-  -h --help     Show this screen.
-     --version  Show version.
-  -v --verbose  Show more information.
-     --root=DIR    Document root. [Default: .]`
+  -h --help        Show this screen.
+     --version     Show version.
+  -v --verbose     Show more information.
+     --root=DIR    Document root. [Default: .]
+     --assets=DIR  Serve assets from a directory.
+`
 
 var (
-	httpAddr string
-	rootDir  string
+	verbose   bool
+	httpAddr  string
+	rootDir   string
+	assetDir  string
+	templates *template.Template
 )
 
 func init() {
@@ -31,47 +36,51 @@ func init() {
 
 	log.SetFlags(0)
 
+	var err error
+
+	verbose = opts["--verbose"].(bool)
+
 	if opts["ADDR"] == nil {
 		opts["ADDR"] = "127.0.0.1:8080"
 	}
-
-	var err error
-
 	httpAddr = opts["ADDR"].(string)
 
 	rootDir, err = filepath.Abs(opts["--root"].(string))
 	if err != nil {
-		fmt.Errorf("Fatal: invalid document root %q: %v", opts["--root"], err)
+		log.Fatalf("Fatal: invalid document root %q: %v", opts["--root"], err)
+	}
+
+	if opts["--assets"] == nil {
+		opts["--assets"] = "./assets"
+	}
+	assetDir, err = filepath.Abs(opts["--assets"].(string))
+	if err != nil {
+		log.Fatalf("Fatal: invalid asset directory %q: %v", opts["--assets"], err)
+	}
+
+	templates, err = template.ParseGlob(filepath.Join(assetDir, "*.html"))
+	if err != nil {
+		log.Fatalf("Fatal: template error: %v", err)
 	}
 }
 
 func main() {
-	log.Printf("rootDir=%v httpAddr=%v", rootDir, httpAddr)
+	log.Printf("httpAddr=%v rootDir=%v assetDir=%v", httpAddr, rootDir, assetDir)
 
-	http.Handle("/markdown/", http.StripPrefix("/markdown/", http.HandlerFunc(markdown)))
-	http.HandleFunc("/", index)
+	http.Handle("/assets/", Log(http.StripPrefix("/assets/", http.FileServer(http.Dir(assetDir)))))
+	http.Handle("/markdown/", Log(http.StripPrefix("/markdown/", http.HandlerFunc(markdown))))
+	http.Handle("/favicon.ico", Log(http.HandlerFunc(favicon)))
+	http.Handle("/", Log(http.HandlerFunc(index)))
+
+	log.Printf("starting server at %v", httpAddr)
 	log.Fatal(http.ListenAndServe(httpAddr, nil))
 }
 
-var indexTemplate = template.Must(template.New("index").Parse(`
-<!DOCTYPE html>
-<html>
-<head>
-	<title>Markdown Server</title>
-</head>
-<body>
-	<ul>
-	{{range .}}
-		<li><a href="/markdown/{{.}}">{{.}}</a></li>
-	{{end}}
-	</ul>
-</body>
-</html>
-`))
+func favicon(w http.ResponseWriter, r *http.Request) {
+	// TODO: serve favicon.ico
+}
 
 func index(w http.ResponseWriter, r *http.Request) {
-	log.Printf("GET %v", r.RequestURI)
-
 	matches, err := filepath.Glob(filepath.Join(rootDir, "*.md"))
 	if err != nil {
 		log.Printf("Error: %v", err)
@@ -84,38 +93,43 @@ func index(w http.ResponseWriter, r *http.Request) {
 		files = append(files, dir)
 	}
 
-	if err := indexTemplate.Execute(w, files); err != nil {
+	if err := templates.ExecuteTemplate(w, "index.html", files); err != nil {
 		log.Printf("Error: %v", err)
 		return
 	}
 }
 
-var markdownTemplate = template.Must(template.New("index").Parse(`
-<!DOCTYPE html>
-<html>
-<head>
-	<title>Markdown Server</title>
-</head>
-<body>
-	<ul>
-	{{range .}}
-		<li><a href="/markdown/{{.}}">{{.}}</a></li>
-	{{end}}
-	</ul>
-</body>
-</html>
-`))
+type Markdown struct {
+	Filename string
+	Content  string
+}
 
 func markdown(w http.ResponseWriter, r *http.Request) {
-	log.Printf("GET %v -> %v", r.RequestURI, r.URL.Path)
-
 	b, err := ioutil.ReadFile(filepath.Join(rootDir, r.URL.Path))
 	if err != nil {
 		fmt.Fprintf(w, "Error: %v", err)
 		return
 	}
 
-	if _, err := w.Write(blackfriday.MarkdownCommon(b)); err != nil {
+	flags := blackfriday.HTML_USE_SMARTYPANTS |
+		blackfriday.HTML_SMARTYPANTS_FRACTIONS |
+		blackfriday.HTML_SMARTYPANTS_LATEX_DASHES
+	extensions := blackfriday.EXTENSION_NO_INTRA_EMPHASIS |
+		blackfriday.EXTENSION_TABLES |
+		blackfriday.EXTENSION_FENCED_CODE |
+		blackfriday.EXTENSION_SPACE_HEADERS |
+		blackfriday.EXTENSION_FOOTNOTES |
+		blackfriday.EXTENSION_HEADER_IDS |
+		blackfriday.EXTENSION_TITLEBLOCK |
+		blackfriday.EXTENSION_AUTO_HEADER_IDS
+	renderer := blackfriday.HtmlRenderer(flags, "", "")
+
+	markdown := &Markdown{
+		Filename: r.URL.Path,
+		Content:  string(blackfriday.Markdown(b, renderer, extensions)),
+	}
+
+	if err := templates.ExecuteTemplate(w, "markdown.html", markdown); err != nil {
 		log.Printf("Error: %v", err)
 		return
 	}
