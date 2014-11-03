@@ -1,6 +1,4 @@
----
-author: Mikko Neijonen
----
+
 
 # Markdown Server
 
