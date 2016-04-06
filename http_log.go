@@ -35,5 +35,5 @@ func Log(handler http.Handler) http.Handler {
 func (l requestLogger) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	lw := &loggingResponseWriter{writer: w}
 	l.Handler.ServeHTTP(lw, r)
-	log.Printf(`{ "remote_addr":"%v","request_method":"%v","request_uri":"%v","request_proto":"%v","status":%v`, r.RemoteAddr, r.Method, r.RequestURI, r.Proto, lw.status)
+	log.Printf(`{ "remote_addr":"%v","request_method":"%v","request_uri":"%v","request_proto":"%v","status":%v}`, r.RemoteAddr, r.Method, r.RequestURI, r.Proto, lw.status)
 }
